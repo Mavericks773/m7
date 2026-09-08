@@ -241,8 +241,8 @@ class AccountCard(QFrame):
         row.addWidget(self.settings_button)
         layout.addLayout(row)
         self.qr = QLabel("等待任务生成登录二维码")
-        self.qr.setMinimumHeight(200)
-        self.qr.setStyleSheet("background:#f3f6f8;border-radius:12px;color:#536478;padding:10px;")
+        self.qr.setMinimumHeight(260)
+        self.qr.setStyleSheet("background:#edf2f5;border-radius:12px;color:#314a5c;padding:10px;")
         self.qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.qr.setWordWrap(True)
         layout.addWidget(self.qr)
@@ -305,8 +305,8 @@ class AccountCard(QFrame):
         if account["qr_bytes"] and pix.loadFromData(account["qr_bytes"]):
             self.qr.setPixmap(
                 pix.scaled(
-                    210,
-                    210,
+                    240,
+                    240,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
@@ -355,7 +355,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.connection)
         self.alert = QLabel("")
         self.alert.setWordWrap(True)
-        self.alert.setStyleSheet("color:#9a4f10;")
+        self.alert.setStyleSheet("color:#7a3f00;font-weight:600;")
         layout.addWidget(self.alert)
         card_row = QHBoxLayout()
         self.cards = [AccountCard(), AccountCard()]
@@ -383,19 +383,83 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.tabs, 1)
         self.setCentralWidget(root)
         self.setStyleSheet("""
-            QMainWindow,QDialog {background:#eef3f7;color:#14293b;}
-            QWidget {font-family:'Microsoft YaHei UI';font-size:13px;}
-            QLabel#title {font-size:27px;font-weight:700;color:#153c52;}
-            QLabel#subtitle {color:#617588;padding-bottom:10px;}
-            QFrame#accountCard {background:white;border:1px solid #d8e3eb;border-radius:14px;}
-            QLabel#cardTitle {font-size:20px;font-weight:600;color:#173e50;}
-            QPushButton {background:#fff;border:1px solid #cddbe5;border-radius:7px;padding:8px 12px;}
-            QPushButton:hover {background:#e5f1f5;}
-            QPushButton:disabled {color:#94a2ad;background:#edf1f4;}
-            QPushButton#primary {background:#197f98;color:white;border:0;}
-            QPushButton#primary:disabled {background:#9db5bd;}
-            QComboBox,QLineEdit,QSpinBox {background:white;border:1px solid #cddbe5;border-radius:5px;padding:6px;}
-            QPlainTextEdit,QTableWidget {background:white;border:1px solid #d8e3eb;}
+            QMainWindow, QDialog {background:#edf3f7;color:#172b3a;}
+            QWidget {
+                color:#172b3a;
+                font-family:'Microsoft YaHei UI';
+                font-size:13px;
+            }
+            QLabel {color:#263f50;}
+            QLabel#title {font-size:27px;font-weight:700;color:#0f354b;}
+            QLabel#subtitle {color:#40596b;padding-bottom:10px;}
+            QFrame#accountCard {
+                background:#ffffff;
+                border:1px solid #cbd9e2;
+                border-radius:14px;
+            }
+            QLabel#cardTitle {font-size:20px;font-weight:600;color:#103b50;}
+            QPushButton {
+                color:#163548;
+                background:#ffffff;
+                border:1px solid #b9ccd8;
+                border-radius:7px;
+                padding:8px 12px;
+            }
+            QPushButton:hover {color:#0d3042;background:#dcecf2;border-color:#6f9fb2;}
+            QPushButton:pressed {background:#c9e0e8;}
+            QPushButton:disabled {color:#667985;background:#e2e9ed;border-color:#d1dce2;}
+            QPushButton#primary {background:#126f87;color:#ffffff;border:0;}
+            QPushButton#primary:hover {background:#0e6076;color:#ffffff;}
+            QPushButton#primary:disabled {background:#aec2ca;color:#536976;}
+            QComboBox, QLineEdit, QSpinBox {
+                color:#142c3a;
+                background:#ffffff;
+                border:1px solid #b9ccd8;
+                border-radius:5px;
+                padding:6px;
+                selection-background-color:#126f87;
+                selection-color:#ffffff;
+            }
+            QComboBox:disabled, QLineEdit:disabled, QSpinBox:disabled {
+                color:#667985;
+                background:#e7edf0;
+            }
+            QComboBox QAbstractItemView {
+                color:#142c3a;
+                background:#ffffff;
+                border:1px solid #9fb7c5;
+                selection-background-color:#126f87;
+                selection-color:#ffffff;
+            }
+            QCheckBox {color:#203b4c;spacing:7px;}
+            QPlainTextEdit, QTableWidget {
+                color:#172b3a;
+                background:#ffffff;
+                border:1px solid #c4d4de;
+                selection-background-color:#126f87;
+                selection-color:#ffffff;
+            }
+            QHeaderView::section {
+                color:#17394b;
+                background:#dce8ee;
+                border:0;
+                border-right:1px solid #c2d2dc;
+                border-bottom:1px solid #b7cbd7;
+                padding:7px;
+                font-weight:600;
+            }
+            QTabWidget::pane {background:#ffffff;border:1px solid #c4d4de;}
+            QTabBar::tab {
+                color:#294757;
+                background:#dce6ec;
+                border:1px solid #bccdd7;
+                padding:7px 14px;
+            }
+            QTabBar::tab:selected {color:#10384c;background:#ffffff;font-weight:600;}
+            QStatusBar {color:#294757;background:#e1eaf0;}
+            QMenu {color:#172b3a;background:#ffffff;border:1px solid #b9ccd8;}
+            QMenu::item:selected {color:#ffffff;background:#126f87;}
+            QToolTip {color:#ffffff;background:#203b4c;border:1px solid #486777;}
         """)
         self.add.clicked.connect(self.add_account)
         self.image_button.clicked.connect(self.prepare_image)
