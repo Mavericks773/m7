@@ -1,0 +1,12 @@
+docs/双账号Docker管理器开发方案.md
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.dev/
+.coverage
+htmlcov/

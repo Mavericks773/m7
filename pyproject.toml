@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "m7-account-manager"
+version = "0.1.0"
+description = "Local dual-account Docker manager for March7thAssistant"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-3.0-only"
+dependencies = [
+  "docker==7.2.0",
+  "ruamel.yaml==0.19.1",
+  "PySide6==6.11.2",
+  "tzdata==2026.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "pytest-qt==4.5.0", "ruff==0.16.6"]
+
+[project.scripts]
+m7-manager = "m7manager.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+m7manager = ["resources/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+qt_api = "pyside6"
+markers = ["docker: requires a running local Docker Engine"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
