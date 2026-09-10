@@ -364,14 +364,24 @@ class MainWindow(QMainWindow):
             card_row.addWidget(card)
         layout.addLayout(card_row)
         self.tabs = QTabWidget()
-        self.logs = QPlainTextEdit()
-        self.logs.setReadOnly(True)
-        self.logs.setMaximumBlockCount(1500)
-        self.log_account = QComboBox()
         logs_page = QWidget()
-        logs_layout = QVBoxLayout(logs_page)
-        logs_layout.addWidget(self.log_account)
-        logs_layout.addWidget(self.logs)
+        logs_layout = QHBoxLayout(logs_page)
+        logs_layout.setSpacing(12)
+        self.log_panes = []
+        self.log_labels = []
+        for index in range(2):
+            column = QVBoxLayout()
+            label = QLabel(f"账号 {index + 1}")
+            label.setStyleSheet("font-weight:600;color:#103b50;")
+            pane = QPlainTextEdit()
+            pane.setReadOnly(True)
+            pane.setMaximumBlockCount(1500)
+            pane.setPlaceholderText("等待日志…")
+            column.addWidget(label)
+            column.addWidget(pane)
+            logs_layout.addLayout(column, 1)
+            self.log_labels.append(label)
+            self.log_panes.append(pane)
         self.tabs.addTab(logs_page, "最近日志（保留尾部）")
         self.history = QTableWidget(0, 5)
         self.history.setHorizontalHeaderLabels(
@@ -467,7 +477,6 @@ class MainWindow(QMainWindow):
         self.parallel.currentIndexChanged.connect(
             lambda: self.command.emit("concurrency", self.parallel.currentData())
         )
-        self.log_account.currentIndexChanged.connect(self.update_log)
         self.tray = QSystemTrayIcon(self.windowIcon(), self)
         menu = QMenu(self)
         show = QAction("显示工作台", self)
@@ -530,12 +539,8 @@ class MainWindow(QMainWindow):
         self.parallel.blockSignals(True)
         self.parallel.setCurrentIndex(data["concurrency"] - 1)
         self.parallel.blockSignals(False)
-        current_id = self.log_account.currentData()
-        self.log_account.blockSignals(True)
-        self.log_account.clear()
         for index, account in enumerate(data["accounts"]):
             self.cards[index].update_account(account)
-            self.log_account.addItem(account["display_name"], account["id"])
             run = account["run"]
             if run:
                 state = run["state"]
@@ -547,10 +552,6 @@ class MainWindow(QMainWindow):
                 ):
                     self.tray.showMessage(account["display_name"], STATE_TEXT[state])
                 self.notified[run["id"]] = state
-        idx = self.log_account.findData(current_id)
-        if idx >= 0:
-            self.log_account.setCurrentIndex(idx)
-        self.log_account.blockSignals(False)
         self.update_log()
         self.history.setRowCount(len(data["history"]))
         for row, run in enumerate(data["history"]):
@@ -567,16 +568,17 @@ class MainWindow(QMainWindow):
     def update_log(self):
         if not self.latest:
             return
-        account = next(
-            (a for a in self.latest["accounts"] if a["id"] == self.log_account.currentData()), None
-        )
-        text = account["log_tail"] if account else ""
-        if self.logs.toPlainText() != text:
-            bar = self.logs.verticalScrollBar()
-            at_end = bar.value() >= bar.maximum() - 2
-            previous = bar.value()
-            self.logs.setPlainText(text)
-            bar.setValue(bar.maximum() if at_end else previous)
+        accounts = self.latest["accounts"]
+        for index, (pane, label) in enumerate(zip(self.log_panes, self.log_labels)):
+            account = accounts[index] if index < len(accounts) else None
+            label.setText(account["display_name"] if account else f"账号 {index + 1}")
+            text = account["log_tail"] if account else ""
+            if pane.toPlainText() != text:
+                bar = pane.verticalScrollBar()
+                at_end = bar.value() >= bar.maximum() - 2
+                previous = bar.value()
+                pane.setPlainText(text)
+                bar.setValue(bar.maximum() if at_end else previous)
 
     def request_quit(self):
         if not self.thread:
