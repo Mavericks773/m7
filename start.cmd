@@ -10,8 +10,7 @@ if errorlevel 1 (
     ".venv\Scripts\python.exe" -m pip install -e .
     if errorlevel 1 goto fail
 )
-".venv\Scripts\python.exe" -m m7manager
-if errorlevel 1 goto fail
+start "" ".venv\Scripts\pythonw.exe" -m m7manager
 exit /b 0
 :fail
 echo Startup failed. Please read the error above.
