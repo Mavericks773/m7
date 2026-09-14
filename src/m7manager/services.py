@@ -17,7 +17,14 @@ from .config import (
     validate_patch,
 )
 from .docker_runtime import ACCOUNT, DIGEST, RUN, DockerRuntime, NotFound
-from .storage import ACTIVE_SQL, Store
+from .dungeon_catalog import catalog_metadata, dungeon_types
+from .dungeon_config import (
+    dungeon_fingerprint,
+    dungeon_summary,
+    merge_config_patch,
+    validate_fixed_mode,
+)
+from .storage import ACTIVE, ACTIVE_SQL, Store
 from .upstream_adapter import classify
 
 
@@ -66,7 +73,17 @@ class Manager:
             raise ValueError("账号不存在")
         return row
 
-    def edit_account(self, account_id, name, enabled, local_time, scheduled, timeout, patch):
+    def edit_account(
+        self,
+        account_id,
+        name,
+        enabled,
+        local_time,
+        scheduled,
+        timeout,
+        patch,
+        expected_dungeon_version=None,
+    ):
         self.account(account_id)
         scheduler.validate_time(local_time)
         validate_patch(patch)
@@ -75,7 +92,16 @@ class Manager:
         with self.store.transaction() as db:
             account = db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
             pending = json.loads(account["pending_config"])
-            pending.update(patch)
+            if {"instance_type", "instance_names", "instance_names_challenge_count"} & patch.keys():
+                config = load_config(account_dir(self.root, account_id) / "config.yaml")
+                current = merge_config_patch(config, pending)
+                if (
+                    expected_dungeon_version is not None
+                    and expected_dungeon_version != dungeon_fingerprint(current)
+                ):
+                    raise ValueError("副本配置已在设置窗口打开后变化，请重新打开设置后再保存")
+                validate_fixed_mode(merge_config_patch(current, patch))
+            pending = merge_config_patch(pending, patch)
             db.execute(
                 """UPDATE accounts SET display_name=?,enabled=?,timeout_seconds=?,pending_config=?
                           WHERE id=?""",
@@ -268,6 +294,13 @@ class Manager:
             self.root / "runs" / run["id"] / "config.redacted.yaml",
             dump_config(redacted_config(config)),
         )
+        dungeon = dungeon_summary(config)
+        dungeon.update(catalog_metadata())
+        dungeon["image_digest"] = run["image_digest"]
+        atomic_text(
+            self.root / "runs" / run["id"] / "dungeon-config.json",
+            json.dumps(dungeon, ensure_ascii=False, indent=2),
+        )
         self.store.execute("UPDATE accounts SET pending_config='{}' WHERE id=?", (account["id"],))
         container_id = self.runtime.create(run, account_dir(self.root, account["id"]))
         self._update_run(run["id"], container_id=container_id, state="STARTING")
@@ -446,22 +479,68 @@ class Manager:
             )["n"]
             path = account_dir(self.root, account["id"])
             try:
-                config = load_config(path / "config.yaml")
-                config.update(json.loads(account["pending_config"]))
+                current_config = load_config(path / "config.yaml")
+                pending = json.loads(account["pending_config"])
+                config = merge_config_patch(current_config, pending)
                 account["config"] = {
                     k: config.get(k)
                     for k in (
                         "daily_enable",
                         "power_enable",
+                        "build_target_enable",
                         "cloud_game_use_paid_time",
                         "cloud_game_max_queue_time",
                         "cloud_game_login_timeout",
                     )
                 }
+                account["dungeon"] = dungeon_summary(config)
+                account["dungeon"]["version"] = dungeon_fingerprint(config)
+                names = config.get("instance_names", {})
+                counts = config.get("instance_names_challenge_count", {})
+                account["dungeon"]["instance_names"] = {
+                    key: names.get(key) for key in dungeon_types() if isinstance(names, dict)
+                }
+                account["dungeon"]["challenge_counts"] = {
+                    key: counts.get(key) for key in dungeon_types() if isinstance(counts, dict)
+                }
+                account["dungeon"]["pending"] = bool(
+                    {
+                        "instance_type",
+                        "instance_names",
+                        "instance_names_challenge_count",
+                        "build_target_enable",
+                        "power_plan",
+                        "power_plan_keep",
+                        "echo_of_war_enable",
+                        "activity_gardenofplenty_enable",
+                        "activity_realmofthestrange_enable",
+                        "activity_planarfissure_enable",
+                        "merge_immersifier",
+                    }
+                    & pending.keys()
+                )
             except Exception:
                 account["config"] = {}
+                account["dungeon"] = {
+                    "fixed_mode": False,
+                    "instance_type": None,
+                    "instance_name": None,
+                    "batch_count": None,
+                    "conflicts": ["config_error"],
+                    "pending": False,
+                }
             account["qr_bytes"] = b""
             run = account["run"]
+            account["run_dungeon"] = None
+            if run and run["state"] in ACTIVE:
+                try:
+                    account["run_dungeon"] = json.loads(
+                        (self.root / "runs" / run["id"] / "dungeon-config.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                except (OSError, ValueError):
+                    pass
             if run and run["state"] == "WAITING_LOGIN" and run["started_at"]:
                 qr = path / "logs" / "qrcode_login.png"
                 try:

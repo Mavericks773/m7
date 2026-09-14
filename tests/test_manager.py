@@ -4,6 +4,7 @@ from datetime import datetime
 import pytest
 
 from m7manager.config import account_dir, dump_config, load_config
+from m7manager.dungeon_config import fixed_dungeon_patch
 from m7manager.services import Manager
 
 from .fakes import IMAGE, FakeRuntime
@@ -139,6 +140,116 @@ def test_pending_config_preserves_upstream_progress(context):
     assert load_config(path)["last_run_timestamp"] == 123456789
     assert load_config(path)["power_enable"] is False
     assert [c[0] for c in rt.calls] == ["create", "start", "remove", "create", "start"]
+
+
+def test_fixed_dungeon_is_isolated_pending_and_recorded_at_start(context):
+    m, _, _ = context
+    a, b = m.add_account("A"), m.add_account("B")
+    before_a = load_config(account_dir(m.root, a) / "config.yaml")
+    before_b = load_config(account_dir(m.root, b) / "config.yaml")
+    patch = fixed_dungeon_patch("侵蚀隧洞", "睿治之径", 6)
+
+    m.edit_account(a, "A", True, "04:15", False, 3600, patch)
+    pending = m.snapshot()["accounts"][0]["dungeon"]
+    assert pending["fixed_mode"] and pending["pending"]
+    assert pending["instance_name"] == "睿治之径"
+    assert load_config(account_dir(m.root, a) / "config.yaml") == before_a
+    assert load_config(account_dir(m.root, b) / "config.yaml") == before_b
+
+    m.enqueue(a, "power")
+    m.tick()
+    applied = load_config(account_dir(m.root, a) / "config.yaml")
+    assert applied["instance_names"]["拟造花萼（金）"] == before_a["instance_names"][
+        "拟造花萼（金）"
+    ]
+    assert applied["instance_names"]["侵蚀隧洞"] == "睿治之径"
+    assert applied["build_target_enable"] is False
+    run = m.store.active()[0]
+    evidence = json.loads(
+        (m.root / "runs" / run["id"] / "dungeon-config.json").read_text(encoding="utf-8")
+    )
+    assert evidence["fixed_mode"]
+    assert evidence["instance_type"] == "侵蚀隧洞"
+    assert evidence["instance_name"] == "睿治之径"
+    assert evidence["batch_count"] == 6
+    assert evidence["image_digest"] == IMAGE
+
+
+def test_incomplete_dungeon_patch_cannot_leave_override_enabled(context):
+    m, _, _ = context
+    a = m.add_account("A")
+    path = account_dir(m.root, a) / "config.yaml"
+    current = load_config(path)
+    current["build_target_enable"] = True
+    path.write_text(dump_config(current), encoding="utf-8")
+    with pytest.raises(ValueError, match="覆盖目标"):
+        m.edit_account(
+            a,
+            "A",
+            True,
+            "04:15",
+            False,
+            3600,
+            {
+                "instance_type": "侵蚀隧洞",
+                "instance_names": {"侵蚀隧洞": "睿治之径"},
+                "instance_names_challenge_count": {"侵蚀隧洞": 6},
+            },
+        )
+
+
+def test_stale_dungeon_dialog_cannot_clear_new_plan_progress(context):
+    m, _, _ = context
+    a = m.add_account("A")
+    version = m.snapshot()["accounts"][0]["dungeon"]["version"]
+    path = account_dir(m.root, a) / "config.yaml"
+    current = load_config(path)
+    current["power_plan"] = [["侵蚀隧洞", "睿治之径", 2]]
+    path.write_text(dump_config(current), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="设置窗口打开后变化"):
+        m.edit_account(
+            a,
+            "A",
+            True,
+            "04:15",
+            False,
+            3600,
+            fixed_dungeon_patch("侵蚀隧洞", "睿治之径", 6),
+            expected_dungeon_version=version,
+        )
+    assert load_config(path)["power_plan"] == [["侵蚀隧洞", "睿治之径", 2]]
+
+
+def test_running_task_keeps_its_dungeon_when_next_run_is_edited(context):
+    m, rt, _ = context
+    a = m.add_account("A")
+    m.enqueue(a, "power")
+    m.tick()
+    first = m.snapshot()["accounts"][0]
+    assert first["run_dungeon"]["instance_name"] == "回忆之蕾"
+
+    m.edit_account(
+        a,
+        "A",
+        True,
+        "04:15",
+        False,
+        3600,
+        fixed_dungeon_patch("侵蚀隧洞", "睿治之径", 6),
+        expected_dungeon_version=first["dungeon"]["version"],
+    )
+    during = m.snapshot()["accounts"][0]
+    assert during["run_dungeon"]["instance_name"] == "回忆之蕾"
+    assert during["dungeon"]["instance_name"] == "睿治之径"
+    assert during["dungeon"]["pending"]
+
+    rt.finish(m.store.active()[0]["container_id"])
+    m.tick()
+    m.enqueue(a, "power")
+    m.tick()
+    second = m.snapshot()["accounts"][0]
+    assert second["run_dungeon"]["instance_name"] == "睿治之径"
 
 
 def test_expired_login_blocks_automatic_not_manual(context):

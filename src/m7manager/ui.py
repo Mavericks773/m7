@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -32,6 +33,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .dungeon_catalog import dungeon_types, instances, max_batch
+from .dungeon_config import fixed_dungeon_patch
 from .scheduler import ZONE
 from .storage import ACTIVE
 
@@ -154,8 +157,12 @@ class SettingsDialog(QDialog):
         self.timeout.setValue(account["timeout_seconds"] // 60)
         self.daily = QCheckBox("每日实训")
         self.daily.setChecked(account["config"].get("daily_enable", True))
-        self.power = QCheckBox("清体力")
+        self.power = QCheckBox("完整日常中清体力")
         self.power.setChecked(account["config"].get("power_enable", True))
+        self.original_build_target = bool(account["config"].get("build_target_enable", False))
+        self.build_target = QCheckBox("启用培养目标（由上游自动选择副本）")
+        self.build_target.setChecked(self.original_build_target)
+        self._build_target_before_fixed = None
         self.paid = QCheckBox("允许使用付费时长（不执行充值）")
         self.paid.setChecked(account["config"].get("cloud_game_use_paid_time", False))
         self.queue_timeout = QSpinBox()
@@ -166,6 +173,50 @@ class SettingsDialog(QDialog):
         self.login_timeout.setRange(1, 30)
         self.login_timeout.setSuffix(" 分钟")
         self.login_timeout.setValue(account["config"].get("cloud_game_login_timeout", 10))
+        dungeon = account.get("dungeon", {})
+        self.dungeon_names = dict(dungeon.get("instance_names", {}))
+        self.dungeon_counts = dict(dungeon.get("challenge_counts", {}))
+        self.apply_fixed = QCheckBox("应用手选固定副本（会关闭覆盖目标的计划和活动）")
+        self.instance_type = QComboBox()
+        self.instance_type.addItem("请选择副本类型", None)
+        for instance_type in dungeon_types():
+            self.instance_type.addItem(instance_type, instance_type)
+        current_type = dungeon.get("instance_type")
+        current_index = self.instance_type.findData(current_type)
+        if current_index >= 0:
+            self.instance_type.setCurrentIndex(current_index)
+        self.instance_name = QComboBox()
+        self.instance_name.setEditable(True)
+        self.instance_name.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.instance_name.completer().setFilterMode(Qt.MatchFlag.MatchContains)
+        self.instance_name.completer().setCompletionMode(
+            QCompleter.CompletionMode.PopupCompletion
+        )
+        self.challenge_count = QSpinBox()
+        self.challenge_count.setSuffix(" 次/批")
+        self.instance_type.currentIndexChanged.connect(self._update_instances)
+        self.apply_fixed.toggled.connect(self._set_dungeon_enabled)
+        self._update_instances()
+        self._set_dungeon_enabled(False)
+        conflict_names = {
+            "build_target_enable": "培养目标",
+            "power_plan": "体力计划",
+            "power_plan_keep": "计划保留",
+            "echo_of_war_enable": "历战余响",
+            "activity_gardenofplenty_enable": "花藏繁生",
+            "activity_realmofthestrange_enable": "异器盈界",
+            "activity_planarfissure_enable": "位面分裂",
+            "merge_immersifier": "优先合成沉浸器",
+            "config_error": "配置读取异常",
+        }
+        conflicts = [conflict_names.get(key, key) for key in dungeon.get("conflicts", [])]
+        strategy = (
+            "当前为手选固定副本模式。"
+            if dungeon.get("fixed_mode")
+            else "当前可能覆盖手选目标：" + ("、".join(conflicts) if conflicts else "未识别的设置")
+        )
+        self.dungeon_strategy = QLabel(strategy)
+        self.dungeon_strategy.setWordWrap(True)
         form.addRow("名称", self.name)
         form.addRow(self.enabled)
         form.addRow(self.scheduled)
@@ -176,6 +227,19 @@ class SettingsDialog(QDialog):
         form.addRow(self.paid)
         form.addRow("云游戏排队上限", self.queue_timeout)
         form.addRow("扫码登录超时", self.login_timeout)
+        form.addRow(QLabel("自动副本"))
+        form.addRow(self.build_target)
+        form.addRow(self.dungeon_strategy)
+        form.addRow(self.apply_fixed)
+        form.addRow("副本类型", self.instance_type)
+        form.addRow("具体副本", self.instance_name)
+        form.addRow("连续挑战", self.challenge_count)
+        dungeon_note = QLabel(
+            "次数是每批连续挑战数，不是任务总次数；清体力会继续使用可用资源。\n"
+            "饰品提取可能消耗沉浸器。只想刷所选副本时，请运行“仅清体力”。"
+        )
+        dungeon_note.setWordWrap(True)
+        form.addRow(dungeon_note)
         note = QLabel(
             "任务设置会在下次运行前应用。\n停用账号会取消排队任务；当前任务请使用“停止”。"
         )
@@ -188,7 +252,76 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
 
+    def _set_dungeon_enabled(self, enabled):
+        self.instance_type.setEnabled(enabled)
+        self.instance_name.setEnabled(enabled)
+        self.challenge_count.setEnabled(enabled)
+        if enabled:
+            self._build_target_before_fixed = self.build_target.isChecked()
+            self.build_target.setChecked(False)
+            self.build_target.setEnabled(False)
+        else:
+            self.build_target.setEnabled(True)
+            if self._build_target_before_fixed is not None:
+                self.build_target.setChecked(self._build_target_before_fixed)
+                self._build_target_before_fixed = None
+
+    def _update_instances(self):
+        instance_type = self.instance_type.currentData()
+        if not instance_type:
+            return
+        previous = self.dungeon_names.get(instance_type)
+        self.instance_name.clear()
+        self.instance_name.addItem("请选择副本", None)
+        for name, description in instances(instance_type).items():
+            self.instance_name.addItem(f"{name} · {description}", name)
+        selected = self.instance_name.findData(previous)
+        if previous and selected < 0:
+            self.instance_name.addItem(f"{previous} · 当前目录未收录", previous)
+            selected = self.instance_name.count() - 1
+        self.instance_name.setCurrentIndex(selected if selected >= 0 else 0)
+        limit = max_batch(instance_type)
+        self.challenge_count.setRange(1, limit)
+        count = self.dungeon_counts.get(instance_type)
+        self.challenge_count.setValue(count if type(count) is int and 1 <= count <= limit else limit)
+
+    def accept(self):
+        if self.apply_fixed.isChecked():
+            try:
+                fixed_dungeon_patch(
+                    self.instance_type.currentData(),
+                    self._selected_instance_name(),
+                    self.challenge_count.value(),
+                )
+            except ValueError as exc:
+                QMessageBox.warning(self, "副本设置未完成", str(exc))
+                return
+        super().accept()
+
+    def _selected_instance_name(self):
+        index = self.instance_name.findText(
+            self.instance_name.currentText(), Qt.MatchFlag.MatchExactly
+        )
+        return self.instance_name.itemData(index) if index >= 0 else None
+
     def payload(self):
+        patch = {
+            "daily_enable": self.daily.isChecked(),
+            "power_enable": self.power.isChecked(),
+            "cloud_game_use_paid_time": self.paid.isChecked(),
+            "cloud_game_max_queue_time": self.queue_timeout.value(),
+            "cloud_game_login_timeout": self.login_timeout.value(),
+        }
+        if self.build_target.isChecked() != self.original_build_target:
+            patch["build_target_enable"] = self.build_target.isChecked()
+        if self.apply_fixed.isChecked():
+            patch.update(
+                fixed_dungeon_patch(
+                    self.instance_type.currentData(),
+                    self._selected_instance_name(),
+                    self.challenge_count.value(),
+                )
+            )
         return {
             "account_id": self.account["id"],
             "name": self.name.text(),
@@ -196,13 +329,12 @@ class SettingsDialog(QDialog):
             "local_time": self.local_time.text(),
             "scheduled": self.scheduled.isChecked(),
             "timeout": self.timeout.value() * 60,
-            "patch": {
-                "daily_enable": self.daily.isChecked(),
-                "power_enable": self.power.isChecked(),
-                "cloud_game_use_paid_time": self.paid.isChecked(),
-                "cloud_game_max_queue_time": self.queue_timeout.value(),
-                "cloud_game_login_timeout": self.login_timeout.value(),
-            },
+            "patch": patch,
+            "expected_dungeon_version": (
+                self.account.get("dungeon", {}).get("version")
+                if self.apply_fixed.isChecked()
+                else None
+            ),
         }
 
 
@@ -294,6 +426,26 @@ class AccountCard(QFrame):
         )
         if run and active and run["deadline_at"]:
             text += "\n最晚结束：" + format_time(run["deadline_at"])
+        run_dungeon = account.get("run_dungeon")
+        dungeon = run_dungeon if active else account.get("dungeon", {})
+        if dungeon.get("instance_type") and dungeon.get("instance_name"):
+            prefix = (
+                "本次清体力"
+                if active
+                else "下次清体力"
+                if dungeon.get("pending")
+                else "清体力"
+            )
+            text += f"\n{prefix}：{dungeon['instance_type']} · {dungeon['instance_name']}"
+            if dungeon.get("batch_count"):
+                text += f" · {dungeon['batch_count']} 次/批"
+            if not dungeon.get("fixed_mode"):
+                text += "（可能被计划或培养目标覆盖）"
+        elif active:
+            text += "\n本次清体力配置准备中"
+        if active and account.get("dungeon", {}).get("pending"):
+            upcoming = account["dungeon"]
+            text += f"\n下次清体力：{upcoming.get('instance_type')} · {upcoming.get('instance_name')}"
         self.next.setText(text)
         self.run_button.setText("立即运行" if account["auth_state"] == "READY" else "初始化并运行")
         self.run_button.setEnabled(
