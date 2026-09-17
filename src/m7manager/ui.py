@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSystemTrayIcon,
     QTableWidget,
@@ -34,7 +35,8 @@ from PySide6.QtWidgets import (
 )
 
 from .dungeon_catalog import dungeon_types, instances, max_batch
-from .dungeon_config import fixed_dungeon_patch
+from .dungeon_config import fixed_dungeon_patch, merge_config_patch, power_plan_patch, weekly_patch
+from .plan_editor import PlanEditor
 from .scheduler import ZONE
 from .storage import ACTIVE
 
@@ -142,9 +144,24 @@ class SettingsDialog(QDialog):
     def __init__(self, account, parent=None):
         super().__init__(parent)
         self.setWindowTitle("账号设置")
-        self.setMinimumWidth(440)
+        self.setObjectName("accountSettings")
+        self.setStyleSheet("""
+            QDialog#accountSettings, QScrollArea#settingsScroll,
+            QWidget#settingsViewport, QWidget#settingsContent {background:#ffffff;}
+        """)
+        self.setMinimumWidth(720)
+        self.resize(800, 780)
         self.account = account
-        form = QFormLayout(self)
+        outer = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setObjectName("settingsScroll")
+        scroll.viewport().setObjectName("settingsViewport")
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        content.setObjectName("settingsContent")
+        form = QFormLayout(content)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
         self.name = QLineEdit(account["display_name"])
         self.enabled = QCheckBox("启用此账号")
         self.enabled.setChecked(bool(account["enabled"]))
@@ -177,6 +194,27 @@ class SettingsDialog(QDialog):
         self.dungeon_names = dict(dungeon.get("instance_names", {}))
         self.dungeon_counts = dict(dungeon.get("challenge_counts", {}))
         self.apply_fixed = QCheckBox("应用手选固定副本（会关闭覆盖目标的计划和活动）")
+        self.apply_plan = QCheckBox("编辑多副本计划与兜底副本（关闭培养目标、双倍活动和优先合成）")
+        self.plan_editor = PlanEditor(dungeon.get("power_plan", []))
+        self.plan_keep = QCheckBox("保留整份计划：每次清体力都重复执行")
+        self.plan_keep.setChecked(bool(dungeon.get("power_plan_keep", False)))
+        self.apply_weekly = QCheckBox("修改独立周本设置")
+        self.weekly_enabled = QCheckBox("完整日常中先打历战余响（启用将关闭培养目标）")
+        self.weekly_enabled.setChecked(bool(dungeon.get("weekly_enabled", False)))
+        self.weekly_day = QComboBox()
+        for day, label in enumerate(("周一", "周二", "周三", "周四", "周五", "周六", "周日"), 1):
+            self.weekly_day.addItem(label, day)
+        self.weekly_day.setCurrentIndex(self.weekly_day.findData(dungeon.get("weekly_day", 1)))
+        self.weekly_name = QComboBox()
+        self.weekly_name.addItem("请选择周本", None)
+        for key, description in instances("历战余响").items():
+            self.weekly_name.addItem(f"{key} · {description}", key)
+        old_weekly = dungeon.get("weekly_name")
+        index = self.weekly_name.findData(old_weekly)
+        if old_weekly and index < 0:
+            self.weekly_name.addItem(f"{old_weekly} · 目录未收录", old_weekly)
+            index = self.weekly_name.count() - 1
+        self.weekly_name.setCurrentIndex(max(0, index))
         self.instance_type = QComboBox()
         self.instance_type.addItem("请选择副本类型", None)
         for instance_type in dungeon_types():
@@ -189,15 +227,23 @@ class SettingsDialog(QDialog):
         self.instance_name.setEditable(True)
         self.instance_name.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.instance_name.completer().setFilterMode(Qt.MatchFlag.MatchContains)
-        self.instance_name.completer().setCompletionMode(
-            QCompleter.CompletionMode.PopupCompletion
-        )
+        self.instance_name.completer().setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         self.challenge_count = QSpinBox()
         self.challenge_count.setSuffix(" 次/批")
         self.instance_type.currentIndexChanged.connect(self._update_instances)
-        self.apply_fixed.toggled.connect(self._set_dungeon_enabled)
+        self.apply_fixed.toggled.connect(self._fixed_toggled)
+        self.apply_plan.toggled.connect(self._plan_toggled)
+        self.apply_weekly.toggled.connect(self._weekly_toggled)
+        self.weekly_enabled.toggled.connect(self._weekly_toggled)
         self._update_instances()
         self._set_dungeon_enabled(False)
+        self.plan_editor.setEnabled(False)
+        self.plan_keep.setEnabled(False)
+        self._weekly_toggled()
+        active = bool(account.get("run") and account["run"]["state"] in ACTIVE)
+        self.apply_plan.setEnabled(not active)
+        if active and dungeon.get("power_plan"):
+            self.apply_fixed.setEnabled(False)
         conflict_names = {
             "build_target_enable": "培养目标",
             "power_plan": "体力计划",
@@ -213,6 +259,8 @@ class SettingsDialog(QDialog):
         strategy = (
             "当前为手选固定副本模式。"
             if dungeon.get("fixed_mode")
+            else "当前体力计划先执行，之后使用兜底副本；周本单独设置。"
+            if dungeon.get("power_plan")
             else "当前可能覆盖手选目标：" + ("、".join(conflicts) if conflicts else "未识别的设置")
         )
         self.dungeon_strategy = QLabel(strategy)
@@ -231,8 +279,18 @@ class SettingsDialog(QDialog):
         form.addRow(self.build_target)
         form.addRow(self.dungeon_strategy)
         form.addRow(self.apply_fixed)
-        form.addRow("副本类型", self.instance_type)
-        form.addRow("具体副本", self.instance_name)
+        form.addRow(self.apply_plan)
+        form.addRow(self.plan_editor)
+        form.addRow(self.plan_keep)
+        plan_note = QLabel(
+            "计划从上到下执行；不保留时，上游扣减剩余次数。运行中不能编辑或清空计划。\n"
+            "最多 20 项，每项 1～999 次；同类型只能使用同一名称，兜底也须一致。\n"
+            "计划后继续刷下方兜底副本；失败不保证立即停止后续项，实际次数以游戏为准。"
+        )
+        plan_note.setWordWrap(True)
+        form.addRow(plan_note)
+        form.addRow("固定／兜底类型", self.instance_type)
+        form.addRow("固定／兜底副本", self.instance_name)
         form.addRow("连续挑战", self.challenge_count)
         dungeon_note = QLabel(
             "次数是每批连续挑战数，不是任务总次数；清体力会继续使用可用资源。\n"
@@ -240,6 +298,17 @@ class SettingsDialog(QDialog):
         )
         dungeon_note.setWordWrap(True)
         form.addRow(dungeon_note)
+        form.addRow(self.apply_weekly)
+        form.addRow(self.weekly_enabled)
+        form.addRow("周本目标", self.weekly_name)
+        form.addRow("从每周这天开始", self.weekly_day)
+        weekly_note = QLabel(
+            "周本仅随完整日常且清体力开关开启时执行，在普通计划前消耗体力。\n"
+            "从选定星期起至周日检查；次数和每周刷新由上游读取游戏决定。仅清体力不打周本。\n"
+            "应用固定模式默认关闭周本；同时勾选修改周本设置可独立启用。"
+        )
+        weekly_note.setWordWrap(True)
+        form.addRow(weekly_note)
         note = QLabel(
             "任务设置会在下次运行前应用。\n停用账号会取消排队任务；当前任务请使用“停止”。"
         )
@@ -250,14 +319,35 @@ class SettingsDialog(QDialog):
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
+        outer.addWidget(buttons)
+
+    def _fixed_toggled(self, enabled):
+        if enabled:
+            self.apply_plan.setChecked(False)
+        self._set_dungeon_enabled(self.apply_fixed.isChecked() or self.apply_plan.isChecked())
+
+    def _plan_toggled(self, enabled):
+        if enabled:
+            self.apply_fixed.setChecked(False)
+        self.plan_editor.setEnabled(enabled)
+        self.plan_keep.setEnabled(enabled)
+        self._set_dungeon_enabled(self.apply_fixed.isChecked() or enabled)
+
+    def _weekly_toggled(self, *_):
+        edit = self.apply_weekly.isChecked()
+        self.weekly_enabled.setEnabled(edit)
+        self.weekly_name.setEnabled(edit and self.weekly_enabled.isChecked())
+        self.weekly_day.setEnabled(edit and self.weekly_enabled.isChecked())
+        self._set_dungeon_enabled(self.apply_fixed.isChecked() or self.apply_plan.isChecked())
 
     def _set_dungeon_enabled(self, enabled):
         self.instance_type.setEnabled(enabled)
         self.instance_name.setEnabled(enabled)
         self.challenge_count.setEnabled(enabled)
-        if enabled:
-            self._build_target_before_fixed = self.build_target.isChecked()
+        manual = enabled or (self.apply_weekly.isChecked() and self.weekly_enabled.isChecked())
+        if manual:
+            if self._build_target_before_fixed is None:
+                self._build_target_before_fixed = self.build_target.isChecked()
             self.build_target.setChecked(False)
             self.build_target.setEnabled(False)
         else:
@@ -283,19 +373,16 @@ class SettingsDialog(QDialog):
         limit = max_batch(instance_type)
         self.challenge_count.setRange(1, limit)
         count = self.dungeon_counts.get(instance_type)
-        self.challenge_count.setValue(count if type(count) is int and 1 <= count <= limit else limit)
+        self.challenge_count.setValue(
+            count if type(count) is int and 1 <= count <= limit else limit
+        )
 
     def accept(self):
-        if self.apply_fixed.isChecked():
-            try:
-                fixed_dungeon_patch(
-                    self.instance_type.currentData(),
-                    self._selected_instance_name(),
-                    self.challenge_count.value(),
-                )
-            except ValueError as exc:
-                QMessageBox.warning(self, "副本设置未完成", str(exc))
-                return
+        try:
+            self.payload()
+        except ValueError as exc:
+            QMessageBox.warning(self, "副本设置未完成", str(exc))
+            return
         super().accept()
 
     def _selected_instance_name(self):
@@ -322,6 +409,31 @@ class SettingsDialog(QDialog):
                     self.challenge_count.value(),
                 )
             )
+        if self.apply_plan.isChecked():
+            patch = merge_config_patch(
+                patch,
+                power_plan_patch(
+                    self.plan_editor.value(),
+                    self.plan_keep.isChecked(),
+                    self.instance_type.currentData(),
+                    self._selected_instance_name(),
+                    self.challenge_count.value(),
+                ),
+            )
+            old = self.account.get("dungeon", {})
+            if patch["power_plan"] == old.get("power_plan", []):
+                patch.pop("power_plan")
+            if patch["power_plan_keep"] == old.get("power_plan_keep", False):
+                patch.pop("power_plan_keep")
+        if self.apply_weekly.isChecked():
+            patch = merge_config_patch(
+                patch,
+                weekly_patch(
+                    self.weekly_enabled.isChecked(),
+                    self.weekly_day.currentData(),
+                    self.weekly_name.currentData(),
+                ),
+            )
         return {
             "account_id": self.account["id"],
             "name": self.name.text(),
@@ -333,6 +445,8 @@ class SettingsDialog(QDialog):
             "expected_dungeon_version": (
                 self.account.get("dungeon", {}).get("version")
                 if self.apply_fixed.isChecked()
+                or self.apply_plan.isChecked()
+                or self.apply_weekly.isChecked()
                 else None
             ),
         }
@@ -427,25 +541,38 @@ class AccountCard(QFrame):
         if run and active and run["deadline_at"]:
             text += "\n最晚结束：" + format_time(run["deadline_at"])
         run_dungeon = account.get("run_dungeon")
-        dungeon = run_dungeon if active else account.get("dungeon", {})
+        dungeon = (run_dungeon or {}) if active else account.get("dungeon", {})
         if dungeon.get("instance_type") and dungeon.get("instance_name"):
             prefix = (
-                "本次清体力"
-                if active
-                else "下次清体力"
-                if dungeon.get("pending")
-                else "清体力"
+                "本次清体力" if active else "下次清体力" if dungeon.get("pending") else "清体力"
             )
             text += f"\n{prefix}：{dungeon['instance_type']} · {dungeon['instance_name']}"
             if dungeon.get("batch_count"):
                 text += f" · {dungeon['batch_count']} 次/批"
-            if not dungeon.get("fixed_mode"):
+            if dungeon.get("power_plan"):
+                mode = "每次保留重跑" if dungeon.get("power_plan_keep") else "扣减剩余次数"
+                text += f"\n先执行 {len(dungeon['power_plan'])} 项体力计划（{mode}），再刷上述兜底"
+            elif "build_target_enable" in dungeon.get("conflicts", []):
                 text += "（可能被计划或培养目标覆盖）"
         elif active:
             text += "\n本次清体力配置准备中"
+        if dungeon.get("weekly_enabled"):
+            text += (
+                f"\n周本：{dungeon.get('weekly_name')} · 周{dungeon.get('weekly_day')}起"
+                "（完整日常中先于普通计划执行）"
+            )
         if active and account.get("dungeon", {}).get("pending"):
             upcoming = account["dungeon"]
-            text += f"\n下次清体力：{upcoming.get('instance_type')} · {upcoming.get('instance_name')}"
+            text += (
+                f"\n下次清体力：{upcoming.get('instance_type')} · {upcoming.get('instance_name')}"
+            )
+            if upcoming.get("power_plan"):
+                text += f" · {len(upcoming['power_plan'])} 项计划"
+            text += (
+                f"\n下次周本：{upcoming.get('weekly_name')} · 周{upcoming.get('weekly_day')}起"
+                if upcoming.get("weekly_enabled")
+                else "\n下次周本：关闭"
+            )
         self.next.setText(text)
         self.run_button.setText("立即运行" if account["auth_state"] == "READY" else "初始化并运行")
         self.run_button.setEnabled(

@@ -74,11 +74,11 @@ def test_nested_patch_preserves_other_types_and_progress_fields():
     validate_fixed_mode(merged)
 
 
-def test_patch_validation_rejects_description_nonempty_plan_and_unsupported_enable():
+def test_patch_validation_rejects_description_and_unsupported_enable():
     with pytest.raises(ValueError):
         validate_patch({"instance_names": {"拟造花萼（赤）": "毁灭之蕾"}})
-    with pytest.raises(ValueError):
-        validate_patch({"power_plan": [["侵蚀隧洞", "睿治之径", 1]]})
+    validate_patch({"power_plan": [["侵蚀隧洞", "睿治之径", 1]]})
     validate_patch({"build_target_enable": True})
     with pytest.raises(ValueError):
-        validate_patch({"echo_of_war_enable": True})
+        validate_patch({"activity_gardenofplenty_enable": True})
+    validate_patch({"echo_of_war_enable": True})

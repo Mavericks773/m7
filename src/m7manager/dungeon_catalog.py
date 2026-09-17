@@ -20,6 +20,8 @@ def dungeon_types():
 
 
 def instances(instance_type):
+    if instance_type == "历战余响":
+        return dict(catalog().get("weekly_instances", {}))
     entry = catalog()["types"].get(instance_type)
     return dict(entry["instances"]) if entry else {}
 

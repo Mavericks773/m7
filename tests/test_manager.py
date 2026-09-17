@@ -159,9 +159,9 @@ def test_fixed_dungeon_is_isolated_pending_and_recorded_at_start(context):
     m.enqueue(a, "power")
     m.tick()
     applied = load_config(account_dir(m.root, a) / "config.yaml")
-    assert applied["instance_names"]["拟造花萼（金）"] == before_a["instance_names"][
-        "拟造花萼（金）"
-    ]
+    assert (
+        applied["instance_names"]["拟造花萼（金）"] == before_a["instance_names"]["拟造花萼（金）"]
+    )
     assert applied["instance_names"]["侵蚀隧洞"] == "睿治之径"
     assert applied["build_target_enable"] is False
     run = m.store.active()[0]

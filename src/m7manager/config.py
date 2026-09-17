@@ -11,7 +11,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 
 from .dungeon_catalog import dungeon_types, instances, max_batch
-from .dungeon_config import FIXED_MODE_DISABLED_FIELDS, merge_config_patch
+from .dungeon_config import FIXED_MODE_DISABLED_FIELDS, merge_config_patch, validate_plan
 
 BASELINE = "5e70b0261a99f6666e99a64a0ffae7488db0fa2b"
 DEFAULTS = {
@@ -52,12 +52,17 @@ INT_EDITABLE = {
     "cloud_game_login_timeout",
     "log_retention_days",
 }
-EDITABLE = BOOL_EDITABLE | INT_EDITABLE | {
-    "instance_type",
-    "instance_names",
-    "instance_names_challenge_count",
-    "power_plan",
-}
+EDITABLE = (
+    BOOL_EDITABLE
+    | INT_EDITABLE
+    | {
+        "instance_type",
+        "instance_names",
+        "instance_names_challenge_count",
+        "power_plan",
+        "echo_of_war_start_day_of_week",
+    }
+)
 SENSITIVE = re.compile(r"password|secret|token|cookie|webhook|notify_|account|telemetry_id", re.I)
 
 
@@ -89,7 +94,11 @@ def validate_patch(patch):
         if key in BOOL_EDITABLE:
             if type(value) is not bool:
                 raise ValueError(f"{key} 必须是布尔值")
-            if key in FIXED_MODE_DISABLED_FIELDS and key != "build_target_enable" and value:
+            if (
+                key in FIXED_MODE_DISABLED_FIELDS
+                and key not in {"build_target_enable", "power_plan_keep", "echo_of_war_enable"}
+                and value
+            ):
                 raise ValueError(f"当前版本只允许在应用固定副本时关闭 {key}")
         elif key in INT_EDITABLE and (type(value) is not int or not 1 <= value <= 120):
             raise ValueError(f"{key} 必须为 1～120 的整数")
@@ -100,7 +109,7 @@ def validate_patch(patch):
                 raise ValueError("副本名称设置必须是非空映射")
             for instance_type, instance_name in value.items():
                 if (
-                    instance_type not in dungeon_types()
+                    instance_type not in (*dungeon_types(), "历战余响")
                     or not isinstance(instance_name, str)
                     or instance_name not in instances(instance_type)
                 ):
@@ -117,8 +126,11 @@ def validate_patch(patch):
                     raise ValueError(
                         f"{instance_type} 每批连续挑战次数须为 1～{max_batch(instance_type)}"
                     )
-        elif key == "power_plan" and value != []:
-            raise ValueError("当前版本只能在切换固定副本时清空体力计划")
+        elif key == "power_plan":
+            validate_plan(value)
+        elif key == "echo_of_war_start_day_of_week":
+            if type(value) is not int or not 1 <= value <= 7:
+                raise ValueError("周本开始星期须为 1～7 的整数")
 
 
 def load_config(path: Path):

@@ -22,7 +22,8 @@ from .dungeon_config import (
     dungeon_fingerprint,
     dungeon_summary,
     merge_config_patch,
-    validate_fixed_mode,
+    validate_manual_power,
+    weekly_patch,
 )
 from .storage import ACTIVE, ACTIVE_SQL, Store
 from .upstream_adapter import classify
@@ -92,15 +93,62 @@ class Manager:
         with self.store.transaction() as db:
             account = db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
             pending = json.loads(account["pending_config"])
-            if {"instance_type", "instance_names", "instance_names_challenge_count"} & patch.keys():
+            dungeon_fields = {
+                "instance_type",
+                "instance_names",
+                "instance_names_challenge_count",
+                "power_plan",
+                "power_plan_keep",
+                "echo_of_war_enable",
+                "echo_of_war_start_day_of_week",
+                "build_target_enable",
+            }
+            if dungeon_fields & patch.keys():
                 config = load_config(account_dir(self.root, account_id) / "config.yaml")
                 current = merge_config_patch(config, pending)
+                plan_edit = bool({"power_plan", "power_plan_keep"} & patch.keys())
+                if plan_edit and (
+                    current.get("power_plan")
+                    or patch.get("power_plan")
+                    or any(
+                        current.get(k) != patch[k]
+                        for k in ("power_plan", "power_plan_keep")
+                        if k in patch
+                    )
+                ):
+                    if any(r["account_id"] == account_id for r in self.store.active()):
+                        raise ValueError("账号运行期间不能编辑或清空体力计划，请停止任务后再修改")
+                    if expected_dungeon_version is None:
+                        raise ValueError("修改体力计划需要最新配置版本，请重新打开设置")
                 if (
                     expected_dungeon_version is not None
                     and expected_dungeon_version != dungeon_fingerprint(current)
                 ):
                     raise ValueError("副本配置已在设置窗口打开后变化，请重新打开设置后再保存")
-                validate_fixed_mode(merge_config_patch(current, patch))
+                merged = merge_config_patch(current, patch)
+                ordinary_names = set(patch.get("instance_names", {})) - {"历战余响"}
+                if (
+                    ordinary_names
+                    or {
+                        "instance_type",
+                        "instance_names_challenge_count",
+                        "power_plan",
+                        "power_plan_keep",
+                    }
+                    & patch.keys()
+                ):
+                    validate_manual_power(merged)
+                if merged.get("echo_of_war_enable") and (
+                    {"echo_of_war_enable", "echo_of_war_start_day_of_week"} & patch.keys()
+                    or "历战余响" in patch.get("instance_names", {})
+                ):
+                    weekly_patch(
+                        True,
+                        merged.get("echo_of_war_start_day_of_week"),
+                        merged.get("instance_names", {}).get("历战余响"),
+                    )
+                    if merged.get("build_target_enable"):
+                        raise ValueError("手选周本需关闭培养目标，避免覆盖周本选择")
             pending = merge_config_patch(pending, patch)
             db.execute(
                 """UPDATE accounts SET display_name=?,enabled=?,timeout_seconds=?,pending_config=?
@@ -512,6 +560,7 @@ class Manager:
                         "power_plan",
                         "power_plan_keep",
                         "echo_of_war_enable",
+                        "echo_of_war_start_day_of_week",
                         "activity_gardenofplenty_enable",
                         "activity_realmofthestrange_enable",
                         "activity_planarfissure_enable",
