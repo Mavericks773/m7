@@ -7,6 +7,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from .migrations import migrate
+
 ACTIVE = ("PREPARING", "STARTING", "RUNNING", "WAITING_LOGIN", "STOPPING", "RECONCILING")
 TERMINAL = ("EXITED", "FAILED", "CANCELLED", "TIMED_OUT", "MISSED")
 ACTIVE_SQL = ",".join(f"'{state}'" for state in ACTIVE)
@@ -17,11 +19,18 @@ class Store:
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(self.root / "manager.db", check_same_thread=False)
+        db_path = self.root / "manager.db"
+        existed = db_path.exists() and db_path.stat().st_size > 0
+        self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
+        had_user_tables = bool(
+            self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+            ).fetchone()
+        )
         self.db.executescript(f"""
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS accounts (
@@ -61,6 +70,7 @@ class Store:
             ON runs(account_id) WHERE state IN ({ACTIVE_SQL});
             CREATE INDEX IF NOT EXISTS queue_index ON triggers(state, scheduled_for, created_at);
         """)
+        migrate(self.db, self.root, existed and had_user_tables)
         self.db.execute(
             "INSERT OR IGNORE INTO settings VALUES ('installation_id', ?)",
             (json.dumps(uuid.uuid4().hex[:12]),),

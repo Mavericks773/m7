@@ -7,7 +7,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 ".venv\Scripts\python.exe" -c "import m7manager, docker, PySide6" >nul 2>nul
 if errorlevel 1 (
-    ".venv\Scripts\python.exe" -m pip install -e .
+    ".venv\Scripts\python.exe" -m pip install -e ".[desktop]"
     if errorlevel 1 goto fail
 )
 start "" ".venv\Scripts\pythonw.exe" -m m7manager

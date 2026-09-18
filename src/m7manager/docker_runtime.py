@@ -64,9 +64,9 @@ class DockerRuntime:
             except Exception:
                 if client:
                     client.close()
-        raise RuntimeError(
-            "无法连接本地 Linux Docker。请启动 Docker Desktop 并确认 Linux 容器引擎就绪。"
-        )
+        if os.name == "nt":
+            raise RuntimeError("无法连接本地 Linux Docker。请启动 Docker Desktop 并确认 Linux 容器引擎就绪。")
+        raise RuntimeError("无法连接本机 Linux Docker Engine。请确认 docker.service 已启动且服务用户有权访问 /var/run/docker.sock。")
 
     def name(self, account_id):
         return f"m7mgr-{self.installation_id}-{account_id}"

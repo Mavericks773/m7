@@ -12,7 +12,7 @@ Windows 本地桌面原型，通过两个独立的 Linux Docker 容器运行 Mar
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,desktop,dev-desktop]"
 .\.venv\Scripts\python.exe -m m7manager
 ```
 
@@ -100,7 +100,7 @@ $env:M7_TEST_DOCKER = "1"
 
 完整设计见 [双账号 Docker 管理器开发方案](docs/双账号Docker管理器开发方案.md)，阶段记录见 [开发进度](docs/开发进度.md)。
 
-Linux 无桌面环境的后续改造见 [命令行服务器改造开发方案](docs/命令行服务器改造开发方案.md)（待实现）。
+Linux 无桌面环境的部署准备见 [Debian 13.2 部署说明](deploy/debian13.md)，改造边界与验收标准见 [命令行服务器改造开发方案](docs/命令行服务器改造开发方案.md)。
 
 副本选择的实现边界与后续多副本计划见 [自主选择自动执行副本功能开发方案](docs/自主选择自动执行副本功能开发方案.md)。
 

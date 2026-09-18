@@ -40,6 +40,7 @@ class Manager:
         self.docker_status = "尚未检查 Docker"
         self.alerts = []
         self.shutting_down = False
+        self._closed = False
 
     def add_account(self, name):
         name = name.strip()
@@ -484,7 +485,7 @@ class Manager:
             except Exception as exc:
                 self._update_run(run["id"], state="RECONCILING", error_code=type(exc).__name__)
                 self.alerts.append("任务状态需要协调：" + str(exc))
-        if orphans or self.shutting_down:
+        if orphans or self.shutting_down or getattr(self, "dispatch_paused", False):
             return
         while True:
             run = self._claim(now)
@@ -504,12 +505,36 @@ class Manager:
                 self._update_run(run["id"], state="RECONCILING", error_code=type(exc).__name__)
                 self.alerts.append("启动结果待确认：" + str(exc))
 
-    def shutdown(self):
+    def shutdown(self, cancel_tasks=True):
         self.shutting_down = True
-        self.store.execute("UPDATE triggers SET state='CANCELLED' WHERE state='QUEUED'")
-        self.store.execute(
-            f"UPDATE runs SET stop_reason='CANCELLED',state='STOPPING' WHERE state IN ({ACTIVE_SQL})"
-        )
+        if cancel_tasks:
+            self.store.execute("UPDATE triggers SET state='CANCELLED' WHERE state='QUEUED'")
+            self.store.execute(
+                f"UPDATE runs SET stop_reason='CANCELLED',state='STOPPING' WHERE state IN ({ACTIVE_SQL})"
+            )
+
+    def set_schedule(self, account_id, local_time, enabled):
+        self.account(account_id)
+        scheduler.validate_time(local_time)
+        with self.store.transaction() as db:
+            old = db.execute("SELECT * FROM schedules WHERE account_id=?", (account_id,)).fetchone()
+            if old["local_time"] != local_time or bool(old["enabled"]) != bool(enabled):
+                db.execute(
+                    "UPDATE triggers SET state='CANCELLED' WHERE schedule_id=? AND state='QUEUED'",
+                    (old["id"],),
+                )
+                db.execute(
+                    """UPDATE schedules SET local_time=?,enabled=?,revision=revision+1,next_run_at=?
+                       WHERE account_id=?""",
+                    (local_time, int(enabled), scheduler.next_occurrence(local_time, self.clock()), account_id),
+                )
+
+    def cancel_all(self):
+        for account in self.store.rows("SELECT id FROM accounts"):
+            self.cancel(account["id"])
+
+    def set_dispatch_paused(self, paused):
+        self.dispatch_paused = bool(paused)
 
     def snapshot(self):
         accounts = self.store.rows("SELECT * FROM accounts ORDER BY created_at")
@@ -650,5 +675,8 @@ class Manager:
         return str(path)
 
     def close(self):
+        if self._closed:
+            return
+        self._closed = True
         self.runtime.close()
         self.store.close()

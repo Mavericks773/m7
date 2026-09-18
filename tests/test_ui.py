@@ -1,3 +1,7 @@
+import pytest
+
+pytest.importorskip("PySide6")
+
 from PySide6.QtCore import Qt
 
 from m7manager.services import Manager

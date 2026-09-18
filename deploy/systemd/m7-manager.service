@@ -1,0 +1,27 @@
+[Unit]
+Description=M7 Account Manager daemon
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=simple
+User=m7manager
+Group=m7manager
+WorkingDirectory=/opt/m7manager
+StateDirectory=m7manager
+StateDirectoryMode=0700
+RuntimeDirectory=m7manager
+RuntimeDirectoryMode=0700
+Environment=M7_DATA_DIR=/var/lib/m7manager
+Environment=M7_RUNTIME_DIR=/run/m7manager
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/m7manager/.venv/bin/m7-manager daemon
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
